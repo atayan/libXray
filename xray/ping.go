@@ -9,8 +9,8 @@ import (
 // timeout means how long the http request will be cancelled if no response, in units of seconds.
 // url means the website we use to test speed. "https://www.google.com" is a good choice for most cases.
 // proxy means the local http/socks5 proxy, like "socks5://[::1]:1080".
-func Ping(configPath string, timeout int, url string, proxy string) (int64, error) {
-	server, err := StartXray(configPath)
+func Ping(configJSON string, timeout int, url string, proxy string) (int64, error) {
+	server, err := StartXrayFromJSON(configJSON)
 	if err != nil {
 		return nodep.PingDelayError, err
 	}

@@ -17,6 +17,7 @@ const (
 	LibXrayMethodStopXray                    LibXrayMethod = "stopXray"
 	LibXrayMethodXrayVersion                 LibXrayMethod = "xrayVersion"
 	LibXrayMethodGetXrayState                LibXrayMethod = "getXrayState"
+	LibXrayMethodQueryStats                  LibXrayMethod = "queryStats"
 )
 
 type LibXrayInvokeRequest struct {
@@ -69,7 +70,7 @@ type CountGeoDataRequest struct {
 }
 
 type PingRequest struct {
-	ConfigPath string `json:"configPath,omitempty"`
+	ConfigJSON string `json:"configJSON,omitempty"`
 	Timeout    int    `json:"timeout,omitempty"`
 	URL        string `json:"url,omitempty"`
 	Proxy      string `json:"proxy,omitempty"`
@@ -93,4 +94,9 @@ type XrayVersionResponse struct {
 
 type GetXrayStateResponse struct {
 	Running bool `json:"running"`
+}
+
+type QueryStatsResponse struct {
+	// Counters keyed by name, e.g. "inbound>>>socks-in>>>traffic>>>uplink".
+	Stats map[string]int64 `json:"stats,omitempty"`
 }

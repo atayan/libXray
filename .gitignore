@@ -18,6 +18,7 @@ __pycache__/
 .vscode/
 apple_xcframework/
 
+android_out
 *.xcframework/
 *.jar
 *.aar

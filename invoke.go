@@ -51,6 +51,8 @@ func Invoke(requestJSON string) string {
 		return encodeInvokeResponse(&XrayVersionResponse{Version: xray.XrayVersion()}, nil)
 	case LibXrayMethodGetXrayState:
 		return encodeInvokeResponse(&GetXrayStateResponse{Running: xray.GetXrayState()}, nil)
+	case LibXrayMethodQueryStats:
+		return invokeQueryStats()
 	default:
 		return encodeInvokeResponse(nil, errors.New("unknown method"))
 	}
@@ -171,7 +173,7 @@ func invokePing(payload json.RawMessage) string {
 	if err != nil {
 		return encodeInvokeResponse(nil, err)
 	}
-	delay, err := xray.Ping(request.ConfigPath, request.Timeout, request.URL, request.Proxy)
+	delay, err := xray.Ping(request.ConfigJSON, request.Timeout, request.URL, request.Proxy)
 	if err != nil {
 		return encodeInvokeResponse(nil, err)
 	}
@@ -203,4 +205,12 @@ func invokeRunXrayFromJSON(payload json.RawMessage) string {
 	}
 	err = xray.RunXrayFromJSON(request.ConfigJSON)
 	return encodeInvokeNoDataResponse(err)
+}
+
+func invokeQueryStats() string {
+	counters, err := xray.QueryStats()
+	if err != nil {
+		return encodeInvokeResponse(nil, err)
+	}
+	return encodeInvokeResponse(&QueryStatsResponse{Stats: counters}, nil)
 }
