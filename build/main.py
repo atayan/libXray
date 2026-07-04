@@ -7,6 +7,7 @@ from app.apple_go import AppleGoBuilder
 from app.apple_gomobile import AppleGoMobileBuilder
 from app.linux import LinuxBuilder
 from app.windows import WindowsBuilder
+from app.android_so import AndroidSoBuilder
 
 LOCAL_ARG = "local"
 
@@ -54,6 +55,11 @@ if __name__ == "__main__":
     elif platform == "windows":
         use_local_xray_core = parse_local_arg(sys.argv[2:])
         builder = WindowsBuilder(build_dir_path(), use_local_xray_core)
+        builder.build()
+
+    elif platform == "android-so":
+        build_mode = sys.argv[2] if len(sys.argv) > 2 else "c-shared"
+        builder = AndroidSoBuilder(build_dir_path(), build_mode=build_mode)
         builder.build()
 
     else:
