@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/xtls/xray-core/infra/conf"
@@ -236,7 +235,16 @@ func streamSettingsQuery(proxy conf.OutboundDetourConfig, link *url.URL) {
 			}
 		}
 
-		// QuicParams (bandwidth + port-hopping)
+		// QuicParams (bandwidth)
+		//
+		// Port hopping used to be emitted here as `ports` / `hop-interval`,
+		// read off `QuicParamsConfig.UdpHop`. That field is gone: the core
+		// moved port hopping out of the QUIC params and into the finalMask
+		// system, as a UDP mask (`infra/conf/transport_finalmask.go`,
+		// `udpmaskLoader["udphop"]`), with a different shape — `mode`,
+		// `remotePorts`, `remoteIPs` instead of a port list and an interval.
+		// Dropped rather than translated: nothing in this project reads the
+		// share links these functions produce.
 		if streamSettings.FinalMask != nil && streamSettings.FinalMask.QuicParams != nil {
 			qp := streamSettings.FinalMask.QuicParams
 			if len(qp.BrutalUp) > 0 {
@@ -244,12 +252,6 @@ func streamSettingsQuery(proxy conf.OutboundDetourConfig, link *url.URL) {
 			}
 			if len(qp.BrutalDown) > 0 {
 				query = addQuery(query, "down", string(qp.BrutalDown))
-			}
-			if len(qp.UdpHop.PortList.Range) > 0 {
-				query = addQuery(query, "ports", qp.UdpHop.PortList.String())
-			}
-			if qp.UdpHop.Interval.From != 0 || qp.UdpHop.Interval.To != 0 {
-				query = addQuery(query, "hop-interval", strconv.FormatInt(int64(qp.UdpHop.Interval.From), 10))
 			}
 		}
 
