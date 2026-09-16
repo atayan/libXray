@@ -3,6 +3,16 @@ name: Build libXray
 on:
   workflow_dispatch:
     inputs:
+      targets:
+        description: "Which platforms to build"
+        type: choice
+        default: all
+        options:
+          - all
+          - windows
+          - apple
+          - android
+          - linux
       xray_core_ref:
         description: >-
           Xray-core ref to build against (branch, tag or sha).
@@ -36,40 +46,66 @@ env:
   LOCAL_ARG: ${{ github.event.inputs.xray_core_ref != '' && 'local' || '' }}
 
 jobs:
+  # Which platforms this run covers.
+  #
+  # A separate job rather than an `if:` on each matrix entry: `if:` would
+  # still create all six jobs and show five of them as skipped, and a run
+  # view that is mostly noise is a run view nobody reads. Here the matrix
+  # is narrowed before the jobs exist.
+  #
+  # The platform list lives here once and is filtered, rather than being
+  # written out per branch — one place to add a runner, and no way for the
+  # "all" case to drift from the individual ones.
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # `windows-11-arm` builds the arm64 DLL natively instead of
+          # cross-compiling it from x64. That is not a preference: a Go
+          # c-shared DLL for windows/arm64 produced by a cross toolchain
+          # loads in a millisecond and then hangs on the first call into
+          # the runtime, while the same thing built on an ARM64 machine
+          # works. It is also a newer runner label — if the repository's
+          # plan does not offer it, that is the one entry that will fail
+          # to start, and `targets: windows` is how you find out fast.
+          all=$(cat <<'JSON'
+          [
+            {"runner":"ubuntu-24.04",     "target":"linux",   "arch":"x64",   "artifact":"linux-x64"},
+            {"runner":"ubuntu-24.04-arm", "target":"linux",   "arch":"arm64", "artifact":"linux-arm64"},
+            {"runner":"ubuntu-24.04",     "target":"android",                 "artifact":"android"},
+            {"runner":"windows-2022",     "target":"windows", "arch":"x64",   "artifact":"windows-x64"},
+            {"runner":"windows-11-arm",   "target":"windows", "arch":"arm64", "artifact":"windows-arm64"},
+            {"runner":"macos-26",         "target":"apple",                   "artifact":"apple-cgo"}
+          ]
+          JSON
+          )
+
+          want="${{ github.event.inputs.targets || 'all' }}"
+          if [ "$want" = "all" ]; then
+            include=$(jq -c '.' <<<"$all")
+          else
+            include=$(jq -c --arg t "$want" '[.[] | select(.target == $t)]' <<<"$all")
+          fi
+
+          if [ "$(jq 'length' <<<"$include")" -eq 0 ]; then
+            echo "no platform matches ${want}" >&2
+            exit 1
+          fi
+
+          echo "building: $(jq -r '[.[].artifact] | join(", ")' <<<"$include")"
+          echo "matrix={\"include\":${include}}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: linux
-            arch: x64
-            artifact: linux-x64
-          - runner: ubuntu-24.04-arm
-            target: linux
-            arch: arm64
-            artifact: linux-arm64
-          - runner: ubuntu-24.04
-            target: android
-            artifact: android
-          - runner: windows-2022
-            target: windows
-            arch: x64
-            artifact: windows-x64
-          # Built natively rather than cross-compiled from x64: a Go
-          # c-shared DLL for windows/arm64 produced by a cross toolchain
-          # has a habit of loading fine and then hanging on the first call
-          # into the runtime, while the same thing built on an ARM64
-          # machine works. `windows-11-arm` is a newer runner label — if
-          # the repository's plan doesn't offer it, this is the one job
-          # that will fail to start.
-          - runner: windows-11-arm
-            target: windows
-            arch: arm64
-            artifact: windows-arm64
-          - runner: macos-26
-            target: apple
-            artifact: apple-cgo
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
