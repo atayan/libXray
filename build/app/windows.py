@@ -29,8 +29,14 @@ class WindowsBuilder(Builder):
         create_dir_if_not_exists(output_dir)
         output_file = os.path.join(output_dir, self.lib_file)
         run_env = os.environ.copy()
-        run_env["CC"] = "gcc.exe"
-        run_env["CXX"] = "g++.exe"
+        # `setdefault`, а не присваивание: на x64 рядом лежит обычный
+        # MinGW и `gcc.exe` — то, что надо. На arm64 его нет вовсе, там
+        # cgo собирают llvm-mingw'ом, и компилятор называется иначе
+        # (`aarch64-w64-mingw32-gcc`). Жёстко прописанный `gcc.exe`
+        # означал бы, что под arm64 собрать нельзя в принципе — а так
+        # снаружи можно назвать любой, и умолчание остаётся прежним.
+        run_env.setdefault("CC", "gcc.exe")
+        run_env.setdefault("CXX", "g++.exe")
         run_env["CGO_ENABLED"] = "1"
 
         cmd = [

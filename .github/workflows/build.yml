@@ -2,6 +2,17 @@ name: Build libXray
 
 on:
   workflow_dispatch:
+    inputs:
+      xray_core_ref:
+        description: >-
+          Xray-core ref to build against (branch, tag or sha).
+          Empty = the version pinned in build/app/build.py.
+        type: string
+        default: ""
+      xray_core_repo:
+        description: "Where to take Xray-core from, when a ref is given."
+        type: string
+        default: XTLS/Xray-core
   push:
     tags:
       - "v*"
@@ -15,6 +26,14 @@ env:
   XCODE_VERSION: "latest-stable"
   PYTHON_VERSION: "3.12"
   NDK_VERSION: r29
+
+  # The `local` argument to build/main.py — see `Builder.prepare_xray_core`.
+  #
+  # One knob rather than a boolean plus a ref: a ref means "build against
+  # this checkout", no ref means "build against the pinned module version",
+  # and the two can't be set to contradict each other. A tag push has no
+  # inputs at all, so releases always take the pinned version.
+  LOCAL_ARG: ${{ github.event.inputs.xray_core_ref != '' && 'local' || '' }}
 
 jobs:
   build:
@@ -37,6 +56,17 @@ jobs:
             target: windows
             arch: x64
             artifact: windows-x64
+          # Built natively rather than cross-compiled from x64: a Go
+          # c-shared DLL for windows/arm64 produced by a cross toolchain
+          # has a habit of loading fine and then hanging on the first call
+          # into the runtime, while the same thing built on an ARM64
+          # machine works. `windows-11-arm` is a newer runner label — if
+          # the repository's plan doesn't offer it, this is the one job
+          # that will fail to start.
+          - runner: windows-11-arm
+            target: windows
+            arch: arm64
+            artifact: windows-arm64
           - runner: macos-26
             target: apple
             artifact: apple-cgo
@@ -49,12 +79,40 @@ jobs:
     env:
       CGO_ENABLED: "1"
 
+    # The build script replaces the xray-core module with `../Xray-core`,
+    # a *sibling* of the libXray checkout (`Builder.xray_core_replace_path`).
+    # So libXray can't sit at the workspace root — it goes one level down,
+    # and Xray-core lands beside it.
+    defaults:
+      run:
+        working-directory: libXray
+
     steps:
       # =========================
       # Checkout
       # =========================
       - name: Checkout source
         uses: actions/checkout@v6
+        with:
+          path: libXray
+
+      - name: Checkout Xray-core
+        if: env.LOCAL_ARG == 'local'
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.inputs.xray_core_repo }}
+          ref: ${{ github.event.inputs.xray_core_ref }}
+          path: Xray-core
+
+      - name: Report what we are building against
+        shell: bash
+        run: |
+          if [ "${LOCAL_ARG}" = "local" ]; then
+            echo "xray-core: local checkout of ${{ github.event.inputs.xray_core_repo }}@${{ github.event.inputs.xray_core_ref }}"
+            git -C ../Xray-core log -1 --oneline
+          else
+            echo "xray-core: the version pinned in build/app/build.py"
+          fi
 
       # =========================
       # Python (build scripts)
@@ -77,7 +135,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
 
+      # Skipped when building against a local checkout: the replace
+      # directive isn't in go.mod yet at this point, so a download would
+      # fetch the pinned version — work thrown away a step later, and on a
+      # core that requires a newer Go it fails outright.
       - name: Download Go modules
+        if: env.LOCAL_ARG != 'local'
         run: go mod download
 
       # =========================
@@ -111,28 +174,65 @@ jobs:
           add-to-path: true
 
       # =========================
+      # Windows arm64 toolchain
+      # =========================
+      #
+      # cgo needs a C compiler, and on ARM64 Windows there is no `gcc.exe`
+      # to find — the MinGW that ships in the x64 images is x64. llvm-mingw
+      # is the toolchain that targets aarch64; `windows.py` takes CC/CXX
+      # from the environment when they are set, so naming them here is all
+      # it takes.
+      #
+      # The release is resolved through the API instead of a pinned URL:
+      # llvm-mingw tags by date, and a hardcoded one rots without anyone
+      # noticing until a build breaks.
+      - name: Setup llvm-mingw (Windows arm64)
+        if: matrix.target == 'windows' && matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest
+          $asset = $release.assets | Where-Object { $_.name -like "*-ucrt-aarch64.zip" } | Select-Object -First 1
+          if (-not $asset) { throw "no ucrt-aarch64 asset in llvm-mingw $($release.tag_name)" }
+          Write-Host "llvm-mingw $($release.tag_name): $($asset.name)"
+
+          $zip = Join-Path $env:RUNNER_TEMP $asset.name
+          Invoke-WebRequest $asset.browser_download_url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+
+          $bin = Join-Path (Join-Path $env:RUNNER_TEMP ($asset.name -replace '\.zip$','')) "bin"
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "CC=$bin\aarch64-w64-mingw32-gcc.exe"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CXX=$bin\aarch64-w64-mingw32-g++.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify the C toolchain (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          if ($env:CC) { & $env:CC --version } else { gcc --version }
+
+      # =========================
       # Build steps
       # =========================
 
       - name: Build Linux
         if: matrix.target == 'linux'
         run: |
-          python3 build/main.py linux
+          python3 build/main.py linux ${{ env.LOCAL_ARG }}
 
       - name: Build Android
         if: matrix.target == 'android'
         run: |
-          python3 build/main.py android
+          python3 build/main.py android ${{ env.LOCAL_ARG }}
 
       - name: Build Windows
         if: matrix.target == 'windows'
         run: |
-          python build/main.py windows
+          python build/main.py windows ${{ env.LOCAL_ARG }}
 
       - name: Build Apple (macOS/iOS)
         if: matrix.target == 'apple'
         run: |
-          python3 build/main.py apple go
+          python3 build/main.py apple go ${{ env.LOCAL_ARG }}
 
       # =========================
       # Collect artifacts
@@ -150,7 +250,17 @@ jobs:
               ;;
             windows)
               mkdir -p "dist/${{ matrix.artifact }}"
-              cp windows_dll/libXray.dll "dist/${{ matrix.artifact }}/"
+              # Named by architecture, because the consumer ships both in
+              # one bundle and has to tell them apart: the Enigma app
+              # resolves `libXray_x86-64.dll` / `libXray_aarch64.dll` out
+              # of its resources. Renaming here saves doing it by hand on
+              # every update, which is the step people forget.
+              case "${{ matrix.arch }}" in
+                x64)   suffix="x86-64" ;;
+                arm64) suffix="aarch64" ;;
+                *)     echo "unknown arch ${{ matrix.arch }}" >&2; exit 1 ;;
+              esac
+              cp windows_dll/libXray.dll "dist/${{ matrix.artifact }}/libXray_${suffix}.dll"
               cp windows_dll/libXray.h "dist/${{ matrix.artifact }}/"
               ;;
             android)
@@ -167,11 +277,14 @@ jobs:
       # =========================
       # Upload artifacts
       # =========================
+      #
+      # `working-directory` applies to `run` steps only, so the path here
+      # carries the checkout subdirectory itself.
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: libxray-${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}/
+          path: libXray/dist/${{ matrix.artifact }}/
           if-no-files-found: error
 
   release:
